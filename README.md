@@ -1,56 +1,88 @@
-# HTML-CSS-JS Clone (static)
+# HTML-CSS-JS Clone (static, request-response only)
 
 A pure static (no build, no framework) clone of `repo-for-testing/full-stack-app`'s Next.js frontend.
 Same warm editorial UI — cream canvas, coral accents, serif display type — but rendered as a single
 HTML file plus two CSS/JS files. Designed to be served from S3+CloudFront, GitHub Pages, or any
-static host.
+static host, and to talk to the **FastAPI backend at `repo-for-testing/full-stack-app/backend/`**
+via plain `fetch()` calls. No WebSocket, no SSE streaming — the backend was edited to drop `/chat/stream`.
 
 ## Files
 
-| File        | Purpose                                                       |
-|-------------|---------------------------------------------------------------|
-| `index.html`| Single-page app shell                                         |
-| `style.css` | All styles (mirrors the original Tailwind theme)              |
-| `config.js` | Editable `window.APP_CONFIG` — set `apiUrl` to your backend   |
-| `script.js` | Chat logic; calls `POST {apiUrl}/chat` (non-streaming)        |
+| File        | Purpose                                                                  |
+|-------------|--------------------------------------------------------------------------|
+| `index.html`| Single-page app shell                                                    |
+| `style.css` | All styles (mirrors the original Tailwind theme)                         |
+| `config.js` | Editable `window.APP_CONFIG` — `apiUrl`, endpoints                       |
+| `script.js` | Chat logic; calls `POST {apiUrl}/chat` (non-streaming)                   |
+| `README.md` | This file                                                                |
 
-## Run locally
+## API contract (matches the FastAPI backend)
 
-Just open `index.html` in a browser. Then point `config.js > apiUrl` at a running backend.
+The frontend calls these endpoints, all defined in `repo-for-testing/full-stack-app/backend/main.py`:
 
-For the matching backend in this repo, use the **express-clone**:
+| Method | Path                              | Body                                          | Response                                    |
+|--------|-----------------------------------|-----------------------------------------------|---------------------------------------------|
+| GET    | `/health`                         | —                                             | `{status: "ok"}`                            |
+| GET    | `/conversations`                  | —                                             | `[{id, title, model, created_at, updated_at}]` |
+| GET    | `/conversations/{id}`             | —                                             | `{id, title, ..., messages: [{role, content}]}` |
+| PATCH  | `/conversations/{id}`             | `{title?, model?}`                            | updated conversation                        |
+| DELETE | `/conversations/{id}`             | —                                             | `{ok: true}`                                |
+| POST   | `/conversations/{id}/messages`    | `{role, content}`                             | created message                             |
+| POST   | `/chat`                           | `{message, model?, conversation_id?}`          | `{conversation_id, response}`               |
+
+## Run locally (against the FastAPI backend)
 
 ```bash
-cd ../express-clone
-npm install
-echo "OPENROUTER_API_KEY=sk-or-..." > .env
-npm start
+# Terminal 1: backend
+cd repo-for-testing/full-stack-app/backend
+pip install -r requirements.txt
+export OPENROUTER_API_KEY=sk-or-...   # Windows:  set OPENROUTER_API_KEY=sk-or-...
+uvicorn main:app --reload --port 8000
 ```
 
-Then edit `config.js`:
-
-```js
-window.APP_CONFIG = { apiUrl: "http://localhost:8000", ... };
+```bash
+# Terminal 2: serve the static frontend on port 3000
+# (port 3000 is the backend's default CORS_ORIGINS = FRONTEND_URL,
+#  so requests from the static site will be allowed)
+cd repo-for-testing/html-css-js-clone/..
+python -m http.server 3000
 ```
 
-Open `index.html` in your browser.
+Open <http://localhost:3000/html-css-js-clone/> in your browser.
 
-## API contract assumed
+> **CORS:** the backend's default `CORS_ORIGINS` is `http://localhost:3000`. If you serve the
+> frontend from a different port or domain, set the `CORS_ORIGINS` env var on the backend, e.g.
+> `CORS_ORIGINS=http://localhost:8080,https://my-site.example.com`.
 
-The frontend calls these endpoints (matching the original FastAPI and the express-clone):
+## Point at a different backend
 
-| Method | Path                  | Body / Response                                  |
-|--------|-----------------------|--------------------------------------------------|
-| GET    | `/conversations`      | → `[{id, title, model, ...}]`                    |
-| GET    | `/conversations/{id}` | → `{id, title, messages: [{role, content}, ...]}`|
-| DELETE | `/conversations/{id}` | → `{ok: true}`                                   |
-| POST   | `/chat`               | body `{message, model, conversation_id?}` → `{response, conversation_id}` |
+Three options, in order of preference:
 
-If your backend does not implement `/conversations*` (the express-clone doesn't), the UI silently
-falls back to local-only state — it still works for single-session testing.
+1. **URL query param (no rebuild):**
+   ```
+   http://localhost:3000/?api=https://api.staging.example.com
+   ```
+2. **Edit `config.js`:**
+   ```js
+   window.APP_CONFIG = { apiUrl: "https://api.staging.example.com", ... };
+   ```
+3. **Edit `config.js` and ship:** the static files are pure HTML/CSS/JS — no build step. Upload
+   the four files to S3, GitHub Pages, or any static host.
 
-## Deploying as a static site
+## Deploying the full stack via devops-ai-agent
 
-Drop the four files in any S3 bucket with public read + `index.html` as the error document, or
-push to a CloudFront distribution. The devops-ai-agent's `static_site` deployment type will pick
-this up unchanged.
+The devops-ai-agent's `static_site` deployment type serves this folder as-is. The matching
+`ecs_app` type deploys the FastAPI backend. The only env-var coupling is `apiUrl` (frontend
+config) ↔ `CORS_ORIGINS` (backend env var). Both must agree on the origin the browser sees.
+
+Suggested env-var matrix:
+
+| Backend env       | Value (example)              | Why                                          |
+|-------------------|------------------------------|----------------------------------------------|
+| `OPENROUTER_API_KEY` | `sk-or-...`               | Real AI replies (else the `/chat` endpoint 500s) |
+| `FRONTEND_URL`    | `https://chat.example.com`   | Used as the default `CORS_ORIGINS`            |
+| `CORS_ORIGINS`    | `https://chat.example.com,https://chat-staging.example.com` | Allow multiple origins     |
+
+| Frontend `config.js` | Value (example)              | Why                                          |
+|----------------------|------------------------------|----------------------------------------------|
+| `apiUrl`             | `https://api.example.com`    | Where the FastAPI backend is reachable       |
